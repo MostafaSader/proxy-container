@@ -3,9 +3,9 @@ FROM ubuntu:22.04
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Squid and required tools
+# Install Squid and required tools (including apache2-utils for authentication)
 RUN apt-get update && \
-    apt-get install -y squid curl netcat-openbsd && \
+    apt-get install -y squid curl netcat-openbsd apache2-utils && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
