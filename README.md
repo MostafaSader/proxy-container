@@ -61,9 +61,9 @@ All configuration is done through the `.env` file:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `UPSTREAM_PROXY_HOST` | Hostname or IP of upstream proxy | `192.168.200.220` |
+| `UPSTREAM_PROXY_HOST` | Hostname or IP of upstream proxy | `proxy.example.com` |
 | `UPSTREAM_PROXY_PORT` | Port of upstream proxy | `3128` |
-| `UPSTREAM_PROXY_USER` | Username for upstream proxy | `m.sader` |
+| `UPSTREAM_PROXY_USER` | Username for upstream proxy | `your-username` |
 | `UPSTREAM_PROXY_PASS` | Password for upstream proxy | `your-password` |
 | `NO_PROXY` | Comma-separated domains to bypass | `localhost,127.0.0.1,*.local` |
 
