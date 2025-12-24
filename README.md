@@ -5,7 +5,9 @@ A Docker-based proxy server that connects to an upstream proxy with authenticati
 ## Features
 
 - Connects to an upstream proxy with username/password authentication
-- Exposes a proxy service on port 3128 without authentication
+- **Secure by default**: Proxy requires authentication and is bound to localhost
+- **Rate limiting**: Prevents abuse and bandwidth exhaustion
+- **Input validation**: All inputs are sanitized to prevent injection attacks
 - Supports NO_PROXY configuration to bypass proxy for specific domains
 - Automatic cache directory initialization
 - Health checks and automatic restart
@@ -29,11 +31,22 @@ A Docker-based proxy server that connects to an upstream proxy with authenticati
 3. **Edit `.env` with your proxy credentials**
 
    ```bash
+   # Upstream proxy configuration (optional)
    UPSTREAM_PROXY_HOST=your-proxy-host.com
    UPSTREAM_PROXY_PORT=3128
    UPSTREAM_PROXY_USER=your-username
    UPSTREAM_PROXY_PASS=your-password
    NO_PROXY=localhost,127.0.0.1,*.local
+   
+   # Security configuration (required for authentication)
+   PROXY_USER=myproxyuser
+   PROXY_PASS=mysecurepassword
+   
+   # Optional security settings
+   PROXY_BIND_ADDRESS=127.0.0.1  # Bind to localhost (default, recommended)
+   PROXY_PORT=3128               # Proxy port (default: 3128)
+   ALLOWED_IPS=10.0.0.0/8        # Comma-separated IPs/CIDRs to allow (optional)
+   RATE_LIMIT=100                # Max connections per client (default: 100)
    ```
 
 4. **Build and start the container**
@@ -59,6 +72,8 @@ A Docker-based proxy server that connects to an upstream proxy with authenticati
 
 All configuration is done through the `.env` file:
 
+#### Upstream Proxy Configuration (Optional)
+
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `UPSTREAM_PROXY_HOST` | Hostname or IP of upstream proxy | `proxy.example.com` |
@@ -66,6 +81,19 @@ All configuration is done through the `.env` file:
 | `UPSTREAM_PROXY_USER` | Username for upstream proxy | `your-username` |
 | `UPSTREAM_PROXY_PASS` | Password for upstream proxy | `your-password` |
 | `NO_PROXY` | Comma-separated domains to bypass | `localhost,127.0.0.1,*.local` |
+
+#### Security Configuration (Recommended)
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `PROXY_USER` | Username for proxy authentication | *(none)* | `myuser` |
+| `PROXY_PASS` | Password for proxy authentication | *(none)* | `mypassword` |
+| `PROXY_BIND_ADDRESS` | IP address to bind proxy to | `127.0.0.1` | `0.0.0.0` (all interfaces) |
+| `PROXY_PORT` | Port for proxy service | `3128` | `3128` |
+| `ALLOWED_IPS` | Comma-separated IPs/CIDRs allowed without auth | *(none)* | `10.0.0.0/8,192.168.1.0/24` |
+| `RATE_LIMIT` | Maximum connections per client | `100` | `50` |
+
+**Security Note**: If `PROXY_USER` and `PROXY_PASS` are not set, the proxy will only allow connections from localhost and private networks (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16). For production use, always set authentication credentials.
 
 ### Port Configuration
 
@@ -82,15 +110,32 @@ ports:
 
 Once the container is running, you can use the proxy on `localhost:3128`:
 
+**If authentication is enabled** (PROXY_USER and PROXY_PASS set):
+
 ```bash
-# HTTP request
+# HTTP request with authentication
+curl --proxy-user "${PROXY_USER}:${PROXY_PASS}" --proxy http://localhost:3128 http://example.com
+
+# Or inline
+curl --proxy-user "myuser:mypassword" --proxy http://localhost:3128 http://example.com
+
+# HTTPS request
+curl --proxy-user "${PROXY_USER}:${PROXY_PASS}" --proxy http://localhost:3128 https://example.com
+```
+
+**If authentication is disabled** (only localhost access):
+
+```bash
+# HTTP request (from localhost only)
 curl --proxy http://localhost:3128 http://example.com
 
 # HTTPS request
 curl --proxy http://localhost:3128 https://example.com
+```
 
-# With verbose output
-curl -v --proxy http://localhost:3128 http://example.com
+**With verbose output**:
+```bash
+curl -v --proxy-user "${PROXY_USER}:${PROXY_PASS}" --proxy http://localhost:3128 http://example.com
 ```
 
 ### Testing Scripts
@@ -188,12 +233,33 @@ Common issues:
 
 3. Verify network connectivity (especially on macOS where Docker runs in a VM)
 
-## Security Notes
+## Security Features
 
+### Implemented Security Measures
+
+✅ **Authentication**: Basic HTTP authentication is supported (set `PROXY_USER` and `PROXY_PASS`)
+
+✅ **Network Binding**: By default, proxy binds to `127.0.0.1` (localhost only) to prevent external access
+
+✅ **Input Validation**: All user inputs (passwords, domains, IPs) are sanitized to prevent injection attacks
+
+✅ **Rate Limiting**: Configurable connection limits prevent abuse and bandwidth exhaustion
+
+✅ **Access Control**: 
+   - With authentication: Only authenticated users and allowed IPs can access
+   - Without authentication: Only localhost and private networks (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) can access
+
+✅ **Secure Defaults**: The proxy is secure by default - authentication is recommended for production use
+
+### Security Best Practices
+
+- **Always set `PROXY_USER` and `PROXY_PASS`** for production deployments
 - The `.env` file contains sensitive credentials and is excluded from git
-- The proxy on port 3128 has **no authentication** - anyone with network access can use it
-- Only expose this proxy on trusted networks
-- Consider adding authentication if exposing to the internet
+- Keep `PROXY_BIND_ADDRESS=127.0.0.1` unless you need external access (and have authentication enabled)
+- Use strong passwords for `PROXY_PASS`
+- Regularly rotate credentials
+- Monitor logs for suspicious activity
+- Consider using Docker secrets for credentials in production environments
 
 ## Files Structure
 

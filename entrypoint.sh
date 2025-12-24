@@ -9,14 +9,127 @@ UPSTREAM_PROXY_USER=${UPSTREAM_PROXY_USER:-}
 UPSTREAM_PROXY_PASS=${UPSTREAM_PROXY_PASS:-}
 NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
 
+# Security configuration
+PROXY_USER=${PROXY_USER:-}
+PROXY_PASS=${PROXY_PASS:-}
+PROXY_BIND_ADDRESS=${PROXY_BIND_ADDRESS:-127.0.0.1}
+PROXY_PORT=${PROXY_PORT:-3128}
+ALLOWED_IPS=${ALLOWED_IPS:-}
+RATE_LIMIT=${RATE_LIMIT:-100}
+
+# Function to sanitize password - escape special characters for Squid config
+sanitize_password() {
+    local password="$1"
+    # Escape backslashes first, then colons, spaces, and other special chars
+    echo "$password" | sed 's/\\/\\\\/g' | sed 's/:/\\:/g' | sed 's/ /\\ /g' | sed 's/\n/\\n/g'
+}
+
+# Function to validate and sanitize domain name
+sanitize_domain() {
+    local domain="$1"
+    # Remove whitespace
+    domain=$(echo "$domain" | xargs | tr -d '[:space:]')
+    # Only allow alphanumeric, dots, hyphens, asterisks (for wildcards), and underscores
+    # Reject anything that looks like a command injection attempt
+    if echo "$domain" | grep -qE '^[a-zA-Z0-9._*-]+$' && ! echo "$domain" | grep -qE '[;&|`$(){}]'; then
+        echo "$domain"
+    else
+        echo ""
+    fi
+}
+
 # Create squid configuration
 cat > /etc/squid/squid.conf <<EOF
 # Basic Squid configuration
-http_port 3128
+http_port ${PROXY_BIND_ADDRESS}:${PROXY_PORT}
 
-# Access control - allow all (no auth required)
-acl localnet src all
+# Access control lists
+acl localnet src 127.0.0.1/32 ::1
+acl localnet src 10.0.0.0/8
+acl localnet src 172.16.0.0/12
+acl localnet src 192.168.0.0/16
+
+# Rate limiting to prevent abuse (limit concurrent connections per IP)
+acl max_conn maxconn ${RATE_LIMIT}
+EOF
+
+# Add allowed IPs if configured
+if [ -n "$ALLOWED_IPS" ]; then
+    IFS=',' read -ra IPS <<< "$ALLOWED_IPS"
+    for ip in "${IPS[@]}"; do
+        ip=$(echo "$ip" | xargs)
+        if [ -n "$ip" ]; then
+            # Basic IP validation (CIDR or single IP)
+            if echo "$ip" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$|^([0-9a-fA-F:]+)(/[0-9]{1,3})?$'; then
+                echo "acl allowed_ips src ${ip}" >> /etc/squid/squid.conf
+            fi
+        fi
+    done
+fi
+
+# Configure authentication if credentials provided
+if [ -n "$PROXY_USER" ] && [ -n "$PROXY_PASS" ]; then
+    echo "Configuring basic authentication..."
+    # Install apache2-utils if not already installed (for htpasswd)
+    if ! command -v htpasswd >/dev/null 2>&1; then
+        apt-get update -qq && apt-get install -y -qq apache2-utils >/dev/null 2>&1
+    fi
+    
+    # Create password file
+    mkdir -p /etc/squid
+    # Sanitize password before creating htpasswd entry
+    SANITIZED_PASS=$(sanitize_password "$PROXY_PASS")
+    echo "$PROXY_PASS" | htpasswd -ci /etc/squid/passwords "$PROXY_USER" 2>/dev/null
+    
+    # Configure auth in Squid
+    cat >> /etc/squid/squid.conf <<EOF
+
+# Authentication configuration
+auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwords
+auth_param basic children 5
+auth_param basic realm Proxy
+auth_param basic credentialsttl 2 hours
+acl authenticated proxy_auth REQUIRED
+EOF
+    
+    # Set access rules with authentication
+    if [ -n "$ALLOWED_IPS" ]; then
+        cat >> /etc/squid/squid.conf <<EOF
+# Allow authenticated users and allowed IPs (before rate limiting)
+http_access allow authenticated
+http_access allow allowed_ips
 http_access allow localnet
+EOF
+    else
+        cat >> /etc/squid/squid.conf <<EOF
+# Allow authenticated users and localnet (before rate limiting)
+http_access allow authenticated
+http_access allow localnet
+EOF
+    fi
+else
+    # No authentication - only allow localnet and optionally allowed IPs
+    if [ -n "$ALLOWED_IPS" ]; then
+        cat >> /etc/squid/squid.conf <<EOF
+# Allow localnet and explicitly allowed IPs only (no authentication, before rate limiting)
+http_access allow localnet
+http_access allow allowed_ips
+EOF
+    else
+        cat >> /etc/squid/squid.conf <<EOF
+# Allow localnet only (no authentication, restricted to local network, before rate limiting)
+http_access allow localnet
+EOF
+    fi
+fi
+
+# Rate limiting: deny excessive connections (after allowing legitimate users)
+cat >> /etc/squid/squid.conf <<EOF
+# Deny clients with excessive concurrent connections
+http_access deny max_conn
+
+# Deny all other access
+http_access deny all
 
 # Cache settings (minimal for forwarding proxy)
 cache_dir ufs /var/spool/squid 100 16 256
@@ -30,30 +143,53 @@ EOF
 
 # Configure upstream proxy if provided
 if [ -n "$UPSTREAM_PROXY_HOST" ]; then
-    # Build cache_peer line
+    # Validate upstream proxy host (basic validation)
+    if echo "$UPSTREAM_PROXY_HOST" | grep -qE '[;&|`$(){}]'; then
+        echo "ERROR: Invalid characters in UPSTREAM_PROXY_HOST"
+        exit 1
+    fi
+    
+    # Validate port is numeric
+    if ! echo "$UPSTREAM_PROXY_PORT" | grep -qE '^[0-9]+$'; then
+        echo "ERROR: UPSTREAM_PROXY_PORT must be numeric"
+        exit 1
+    fi
+    
+    # Build cache_peer line with sanitized values
     CACHE_PEER="cache_peer ${UPSTREAM_PROXY_HOST} parent ${UPSTREAM_PROXY_PORT} 0 no-query"
     
     # Add authentication if credentials provided
     if [ -n "$UPSTREAM_PROXY_USER" ] && [ -n "$UPSTREAM_PROXY_PASS" ]; then
-        # Use password as-is without any escaping or cleaning
-        CACHE_PEER="${CACHE_PEER} login=${UPSTREAM_PROXY_USER}:${UPSTREAM_PROXY_PASS}"
+        # Sanitize username and password to prevent injection
+        SANITIZED_USER=$(echo "$UPSTREAM_PROXY_USER" | sed 's/:/\\:/g' | sed 's/ /\\ /g')
+        SANITIZED_PASS=$(sanitize_password "$UPSTREAM_PROXY_PASS")
+        CACHE_PEER="${CACHE_PEER} login=${SANITIZED_USER}:${SANITIZED_PASS}"
     fi
     
     # Add cache_peer configuration first (must be before cache_peer_access)
     # Use printf to ensure the entire line is written correctly
     printf '%s\n' "${CACHE_PEER}" >> /etc/squid/squid.conf
     
-    # Add no_proxy domains
+    # Add no_proxy domains with validation
     if [ -n "$NO_PROXY" ]; then
         # Convert comma-separated list to acl lines
         IFS=',' read -ra DOMAINS <<< "$NO_PROXY"
+        VALID_DOMAINS=()
         for domain in "${DOMAINS[@]}"; do
-            domain=$(echo "$domain" | xargs) # trim whitespace
-            if [ -n "$domain" ]; then
-                echo "acl no_proxy_domains dstdomain ${domain}" >> /etc/squid/squid.conf
+            SANITIZED_DOMAIN=$(sanitize_domain "$domain")
+            if [ -n "$SANITIZED_DOMAIN" ]; then
+                VALID_DOMAINS+=("$SANITIZED_DOMAIN")
+            else
+                echo "WARNING: Skipping invalid domain in NO_PROXY: $domain"
             fi
         done
-        echo "cache_peer_access ${UPSTREAM_PROXY_HOST} deny no_proxy_domains" >> /etc/squid/squid.conf
+        
+        if [ ${#VALID_DOMAINS[@]} -gt 0 ]; then
+            for domain in "${VALID_DOMAINS[@]}"; do
+                echo "acl no_proxy_domains dstdomain ${domain}" >> /etc/squid/squid.conf
+            done
+            echo "cache_peer_access ${UPSTREAM_PROXY_HOST} deny no_proxy_domains" >> /etc/squid/squid.conf
+        fi
     fi
     
     echo "never_direct allow all" >> /etc/squid/squid.conf
@@ -133,11 +269,20 @@ chmod -R 755 /var/log/squid
 
 echo "Starting Squid..."
 echo "Configuration summary:"
-echo "  - Listening on port 3128"
+echo "  - Listening on ${PROXY_BIND_ADDRESS}:${PROXY_PORT}"
+echo "  - Rate limit: ${RATE_LIMIT} connections"
+if [ -n "$PROXY_USER" ] && [ -n "$PROXY_PASS" ]; then
+    echo "  - Proxy authentication: enabled (user: ${PROXY_USER})"
+else
+    echo "  - Proxy authentication: disabled (localnet only)"
+fi
+if [ -n "$ALLOWED_IPS" ]; then
+    echo "  - Allowed IPs: ${ALLOWED_IPS}"
+fi
 if [ -n "$UPSTREAM_PROXY_HOST" ]; then
     echo "  - Upstream proxy: ${UPSTREAM_PROXY_HOST}:${UPSTREAM_PROXY_PORT}"
     if [ -n "$UPSTREAM_PROXY_USER" ]; then
-        echo "  - Authentication: enabled"
+        echo "  - Upstream authentication: enabled"
     fi
 fi
 

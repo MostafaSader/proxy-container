@@ -5,7 +5,9 @@ services:
     build: .
     container_name: proxy
     ports:
-      - "3128:3128"
+      # Bind to localhost only by default for security
+      # Change to "3128:3128" to expose to all interfaces (not recommended)
+      - "127.0.0.1:3128:3128"
     env_file:
       - .env
     volumes:
