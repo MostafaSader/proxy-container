@@ -1,0 +1,21 @@
+# Environment variables with sensitive data
+.env
+
+# Docker volumes
+squid_cache/
+squid_logs/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
