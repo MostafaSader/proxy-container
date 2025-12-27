@@ -43,7 +43,7 @@ A Docker-based proxy server that connects to an upstream proxy with authenticati
    PROXY_PASS=mysecurepassword
    
    # Optional security settings
-   PROXY_BIND_ADDRESS=127.0.0.1  # Bind to localhost (default, recommended)
+   PROXY_BIND_ADDRESS=0.0.0.0    # Bind to all interfaces (0.0.0.0) or localhost (127.0.0.1)
    PROXY_PORT=3128               # Proxy port (default: 3128)
    ALLOWED_IPS=10.0.0.0/8        # Comma-separated IPs/CIDRs to allow (optional)
    RATE_LIMIT=100                # Max connections per client (default: 100)
@@ -88,7 +88,7 @@ All configuration is done through the `.env` file:
 |----------|-------------|---------|---------|
 | `PROXY_USER` | Username for proxy authentication | *(none)* | `myuser` |
 | `PROXY_PASS` | Password for proxy authentication | *(none)* | `mypassword` |
-| `PROXY_BIND_ADDRESS` | IP address to bind proxy to | `127.0.0.1` | `0.0.0.0` (all interfaces) |
+| `PROXY_BIND_ADDRESS` | IP address to bind proxy to | `127.0.0.1` | `0.0.0.0` (all interfaces) or `127.0.0.1` (localhost only) |
 | `PROXY_PORT` | Port for proxy service | `3128` | `3128` |
 | `ALLOWED_IPS` | Comma-separated IPs/CIDRs allowed without auth | *(none)* | `10.0.0.0/8,192.168.1.0/24` |
 | `RATE_LIMIT` | Maximum connections per client | `100` | `50` |
@@ -239,7 +239,7 @@ Common issues:
 
 ✅ **Authentication**: Basic HTTP authentication is supported (set `PROXY_USER` and `PROXY_PASS`)
 
-✅ **Network Binding**: By default, proxy binds to `127.0.0.1` (localhost only) to prevent external access
+✅ **Network Binding**: By default, proxy binds to `127.0.0.1` (localhost only) to prevent external access. Set `PROXY_BIND_ADDRESS=0.0.0.0` to listen on all interfaces (requires authentication for security)
 
 ✅ **Input Validation**: All user inputs (passwords, domains, IPs) are sanitized to prevent injection attacks
 
@@ -255,7 +255,7 @@ Common issues:
 
 - **Always set `PROXY_USER` and `PROXY_PASS`** for production deployments
 - The `.env` file contains sensitive credentials and is excluded from git
-- Keep `PROXY_BIND_ADDRESS=127.0.0.1` unless you need external access (and have authentication enabled)
+- Set `PROXY_BIND_ADDRESS=0.0.0.0` to listen on all interfaces (included in `.env.example`). If not set, defaults to `127.0.0.1` (localhost only). **Always enable authentication when binding to all interfaces**
 - Use strong passwords for `PROXY_PASS`
 - Regularly rotate credentials
 - Monitor logs for suspicious activity
